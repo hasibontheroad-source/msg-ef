@@ -1,0 +1,68 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User mesh identity profile with callsign and public encryption keys",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "callsign": { "type": "string", "maxLength": 64 },
+        "publicKey": { "type": "string", "maxLength": 512 },
+        "radioNodeId": { "type": "string", "maxLength": 32 },
+        "hardwareType": { "type": "string", "maxLength": 64 },
+        "frequencyBand": { "type": "string", "maxLength": 32 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "callsign", "publicKey", "radioNodeId"]
+    },
+    "MeshChannel": {
+      "title": "MeshChannel",
+      "description": "Virtual or radio frequency mesh channel",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64 },
+        "name": { "type": "string", "maxLength": 64 },
+        "isEncrypted": { "type": "boolean" },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "isEncrypted", "createdBy"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Encrypted or broadcast mesh packet relayed between peer nodes or via cloud gateway",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "channelId": { "type": "string", "maxLength": 64 },
+        "senderId": { "type": "string", "maxLength": 128 },
+        "senderCallsign": { "type": "string", "maxLength": 64 },
+        "recipientId": { "type": "string", "maxLength": 128 },
+        "type": { "type": "string", "enum": ["text", "voice", "emergency_sos", "telemetry", "ai_brief"] },
+        "payloadCiphertext": { "type": "string", "maxLength": 50000 },
+        "nonce": { "type": "string", "maxLength": 64 },
+        "hopCount": { "type": "number" },
+        "transportMedium": { "type": "string", "maxLength": 64 },
+        "audioDurationSec": { "type": "number" },
+        "rssiDbm": { "type": "number" },
+        "snrDb": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "channelId", "senderId", "senderCallsign", "recipientId", "type", "payloadCiphertext"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Public and peer directory for cryptographic key exchange"
+    },
+    "/channels/{channelId}": {
+      "schema": "MeshChannel",
+      "description": "Mesh talkgroups and frequency channels"
+    },
+    "/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Store-and-forward mesh packet queue and history"
+    }
+  }
+}

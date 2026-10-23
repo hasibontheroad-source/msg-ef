@@ -1,0 +1,114 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Catch-All Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-\\:\\.\\!]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Connection testing doc
+    match /test/connection {
+      allow read: if true;
+    }
+
+    // User Directory & Public Key Registry
+    match /users/{userId} {
+      function isValidUser(data) {
+        return data.id is string && data.id.size() <= 128
+          && data.callsign is string && data.callsign.size() > 0 && data.callsign.size() <= 64
+          && data.publicKey is string && data.publicKey.size() <= 512
+          && data.radioNodeId is string && data.radioNodeId.size() <= 32
+          && (!('hardwareType' in data) || (data.hardwareType is string && data.hardwareType.size() <= 64))
+          && (!('frequencyBand' in data) || (data.frequencyBand is string && data.frequencyBand.size() <= 32))
+          && (!('updatedAt' in data) || data.updatedAt is timestamp);
+      }
+
+      allow get, list: if isSignedIn();
+      allow create: if isOwner(userId)
+        && isValidId(userId)
+        && incoming().id == userId
+        && isValidUser(incoming());
+      allow update: if isOwner(userId)
+        && isValidId(userId)
+        && incoming().id == existing().id
+        && isValidUser(incoming())
+        && incoming().diff(existing()).affectedKeys().hasOnly(['callsign', 'publicKey', 'radioNodeId', 'hardwareType', 'frequencyBand', 'updatedAt']);
+      allow delete: if isOwner(userId);
+    }
+
+    // Mesh Channels
+    match /channels/{channelId} {
+      function isValidChannel(data) {
+        return data.id is string && data.id.size() <= 64
+          && data.name is string && data.name.size() > 0 && data.name.size() <= 64
+          && data.isEncrypted is bool
+          && data.createdBy is string && data.createdBy.size() <= 128
+          && (!('createdAt' in data) || data.createdAt is timestamp);
+      }
+
+      allow get, list: if isSignedIn();
+      allow create: if isSignedIn()
+        && isValidId(channelId)
+        && incoming().id == channelId
+        && incoming().createdBy == request.auth.uid
+        && isValidChannel(incoming());
+      allow update: if isSignedIn()
+        && isValidId(channelId)
+        && existing().createdBy == request.auth.uid
+        && incoming().id == existing().id
+        && incoming().createdBy == existing().createdBy
+        && isValidChannel(incoming())
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'isEncrypted']);
+      allow delete: if isSignedIn() && existing().createdBy == request.auth.uid;
+    }
+
+    // Store-and-Forward Messages
+    match /messages/{messageId} {
+      function isValidMessage(data) {
+        return data.id is string && data.id.size() <= 128
+          && data.channelId is string && data.channelId.size() <= 64
+          && data.senderId is string && data.senderId.size() <= 128
+          && data.senderCallsign is string && data.senderCallsign.size() <= 64
+          && data.recipientId is string && data.recipientId.size() <= 128
+          && data.type is string && (data.type in ['text', 'voice', 'emergency_sos', 'telemetry', 'ai_brief'])
+          && data.payloadCiphertext is string && data.payloadCiphertext.size() <= 50000
+          && (!('nonce' in data) || (data.nonce is string && data.nonce.size() <= 64))
+          && (!('hopCount' in data) || data.hopCount is number)
+          && (!('transportMedium' in data) || (data.transportMedium is string && data.transportMedium.size() <= 64))
+          && (!('audioDurationSec' in data) || data.audioDurationSec is number)
+          && (!('rssiDbm' in data) || data.rssiDbm is number)
+          && (!('snrDb' in data) || data.snrDb is number)
+          && (!('createdAt' in data) || data.createdAt is timestamp);
+      }
+
+      allow get, list: if isSignedIn();
+      allow create: if isSignedIn()
+        && isValidId(messageId)
+        && incoming().id == messageId
+        && incoming().senderId == request.auth.uid
+        && isValidMessage(incoming());
+      allow update: if false; // Messages are immutable append-only mesh packets
+      allow delete: if isSignedIn() && existing().senderId == request.auth.uid;
+    }
+  }
+}

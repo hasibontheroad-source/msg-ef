@@ -1,0 +1,6 @@
+{
+  "name": "MeshWave - Offline P2P Mesh & Long-Range Radio Communicator",
+  "description": "Ultra-secure offline communicator for Android and Apple iOS with Bluetooth mesh, long-range peer-to-peer RF radio packets, AES-256 E2E encryption, encrypted voice messages, epidemic multi-hop routing, and Firestore sync gateway.",
+  "requestFramePermissions": ["microphone", "bluetooth", "serial"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
