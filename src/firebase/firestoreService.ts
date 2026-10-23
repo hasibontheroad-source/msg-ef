@@ -63,6 +63,8 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 
 export async function syncUserMeshProfile(userId: string, data: {
   callsign: string;
+  avatarUrl?: string;
+  statusMessage?: string;
   publicKey: string;
   radioNodeId: string;
   hardwareType?: string;
@@ -73,6 +75,8 @@ export async function syncUserMeshProfile(userId: string, data: {
     await setDoc(doc(db, 'users', userId), {
       id: userId,
       callsign: data.callsign,
+      avatarUrl: data.avatarUrl || 'avatar_specops',
+      statusMessage: data.statusMessage || 'Available via Internet & LoRa Mesh',
       publicKey: data.publicKey,
       radioNodeId: data.radioNodeId,
       hardwareType: data.hardwareType || 'Cross-Platform Mesh Client',

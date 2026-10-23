@@ -2,18 +2,37 @@
   "entities": {
     "User": {
       "title": "User",
-      "description": "User mesh identity profile with callsign and public encryption keys",
+      "description": "User mesh identity profile with callsign, avatar, unique device ID and public encryption keys",
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
         "callsign": { "type": "string", "maxLength": 64 },
+        "avatarUrl": { "type": "string", "maxLength": 60000 },
         "publicKey": { "type": "string", "maxLength": 512 },
         "radioNodeId": { "type": "string", "maxLength": 32 },
         "hardwareType": { "type": "string", "maxLength": 64 },
         "frequencyBand": { "type": "string", "maxLength": 32 },
+        "statusMessage": { "type": "string", "maxLength": 256 },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "callsign", "publicKey", "radioNodeId"]
+    },
+    "Contact": {
+      "title": "Contact",
+      "description": "Saved mesh contact discovered over radio network",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "nodeId": { "type": "string", "maxLength": 32 },
+        "callsign": { "type": "string", "maxLength": 64 },
+        "nickname": { "type": "string", "maxLength": 64 },
+        "publicKey": { "type": "string", "maxLength": 512 },
+        "avatarUrl": { "type": "string", "maxLength": 60000 },
+        "notes": { "type": "string", "maxLength": 500 },
+        "isVerified": { "type": "boolean" },
+        "savedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "nodeId", "callsign"]
     },
     "MeshChannel": {
       "title": "MeshChannel",
@@ -55,6 +74,10 @@
     "/users/{userId}": {
       "schema": "User",
       "description": "Public and peer directory for cryptographic key exchange"
+    },
+    "/users/{userId}/contacts/{contactId}": {
+      "schema": "Contact",
+      "description": "User's saved mesh contacts"
     },
     "/channels/{channelId}": {
       "schema": "MeshChannel",

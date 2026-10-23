@@ -38,6 +38,8 @@ service cloud.firestore {
           && data.callsign is string && data.callsign.size() > 0 && data.callsign.size() <= 64
           && data.publicKey is string && data.publicKey.size() <= 512
           && data.radioNodeId is string && data.radioNodeId.size() <= 32
+          && (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 60000))
+          && (!('statusMessage' in data) || (data.statusMessage is string && data.statusMessage.size() <= 256))
           && (!('hardwareType' in data) || (data.hardwareType is string && data.hardwareType.size() <= 64))
           && (!('frequencyBand' in data) || (data.frequencyBand is string && data.frequencyBand.size() <= 32))
           && (!('updatedAt' in data) || data.updatedAt is timestamp);
@@ -52,8 +54,35 @@ service cloud.firestore {
         && isValidId(userId)
         && incoming().id == existing().id
         && isValidUser(incoming())
-        && incoming().diff(existing()).affectedKeys().hasOnly(['callsign', 'publicKey', 'radioNodeId', 'hardwareType', 'frequencyBand', 'updatedAt']);
+        && incoming().diff(existing()).affectedKeys().hasOnly(['callsign', 'avatarUrl', 'statusMessage', 'publicKey', 'radioNodeId', 'hardwareType', 'frequencyBand', 'updatedAt']);
       allow delete: if isOwner(userId);
+
+      // User Contacts Subcollection
+      match /contacts/{contactId} {
+        function isValidContact(data) {
+          return data.id is string && data.id.size() <= 128
+            && data.nodeId is string && data.nodeId.size() <= 32
+            && data.callsign is string && data.callsign.size() > 0 && data.callsign.size() <= 64
+            && (!('nickname' in data) || (data.nickname is string && data.nickname.size() <= 64))
+            && (!('publicKey' in data) || (data.publicKey is string && data.publicKey.size() <= 512))
+            && (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 60000))
+            && (!('notes' in data) || (data.notes is string && data.notes.size() <= 500))
+            && (!('isVerified' in data) || data.isVerified is bool)
+            && (!('savedAt' in data) || data.savedAt is timestamp);
+        }
+
+        allow get, list: if isOwner(userId);
+        allow create: if isOwner(userId)
+          && isValidId(contactId)
+          && incoming().id == contactId
+          && isValidContact(incoming());
+        allow update: if isOwner(userId)
+          && isValidId(contactId)
+          && incoming().id == existing().id
+          && isValidContact(incoming())
+          && incoming().diff(existing()).affectedKeys().hasOnly(['nickname', 'notes', 'isVerified', 'avatarUrl']);
+        allow delete: if isOwner(userId);
+      }
     }
 
     // Mesh Channels
@@ -107,7 +136,7 @@ service cloud.firestore {
         && incoming().id == messageId
         && incoming().senderId == request.auth.uid
         && isValidMessage(incoming());
-      allow update: if false; // Messages are immutable append-only mesh packets
+      allow update: if false;
       allow delete: if isSignedIn() && existing().senderId == request.auth.uid;
     }
   }

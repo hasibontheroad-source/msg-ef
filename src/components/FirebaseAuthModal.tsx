@@ -14,6 +14,7 @@ import { signInWithPopup, signOut, User } from 'firebase/auth';
 import { auth, googleProvider, testFirestoreConnection } from '../firebase/config';
 import { syncUserMeshProfile } from '../firebase/firestoreService';
 import { CryptographicIdentity } from '../mesh/types';
+import { meshEngine } from '../mesh/meshEngine';
 
 interface FirebaseAuthModalProps {
   isOpen: boolean;
@@ -43,17 +44,37 @@ export const FirebaseAuthModal: React.FC<FirebaseAuthModalProps> = ({
     setError(null);
     try {
       const res = await signInWithPopup(auth, googleProvider);
-      // Sync cryptographic identity to Firestore directory
       if (res.user) {
+        // Sync cryptographic identity and Google profile to Firestore
         await syncUserMeshProfile(res.user.uid, {
-          callsign: identity.callsign,
+          callsign: res.user.displayName || identity.callsign,
+          avatarUrl: res.user.photoURL || 'avatar_specops',
           publicKey: identity.publicKeyBase64,
           radioNodeId: identity.nodeId,
         });
+
+        // Update local mesh engine identity with Google display name if desired
+        if (res.user.displayName) {
+          meshEngine.updateUserProfile({
+            callsign: res.user.displayName,
+            avatarUrl: res.user.photoURL || meshEngine.userProfile.avatarUrl,
+          });
+        }
       }
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Firebase Auth error:', err);
-      setError(err instanceof Error ? err.message : String(err));
+      const code = (err as { code?: string })?.code;
+      if (code === 'auth/popup-blocked') {
+        setError('Popup was blocked by your browser. Please allow popups for this site and try again.');
+      } else if (code === 'auth/popup-closed-by-user') {
+        setError('Sign-in popup was closed before completing authentication. Please click Sign In again.');
+      } else if (code === 'auth/cancelled-popup-request') {
+        setError('Sign-in request was cancelled. Please try again.');
+      } else if (code === 'auth/network-request-failed') {
+        setError('Network connectivity issue. When offline, MeshWave continues to work 100% via radio mesh.');
+      } else {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
       setLoading(false);
     }

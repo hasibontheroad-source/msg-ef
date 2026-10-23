@@ -1,29 +1,55 @@
-import { CryptographicIdentity, MeshNode, MeshPacket, MessageType, TransportMedium } from './types';
-import { SeenPacketCache, createMeshPacket, prepareRelayPacket, shouldRelayPacket, calculateLinkQuality } from './routing';
+import { CryptographicIdentity, MeshContact, MeshNode, MeshPacket, MessageType, NetworkMode, TransportMedium, UserProfile } from './types';
+import { SeenPacketCache, createMeshPacket, prepareRelayPacket, shouldRelayPacket } from './routing';
 import { decryptPayload, encryptPayload, generateDeviceIdentity } from './crypto';
 import { hardwareRadio } from './hardware';
 import { acousticModem } from './acoustic';
+import { generateDeviceNodeId, validateDeviceNodeId } from './contacts';
+
+export const PRESET_AVATARS = [
+  { id: 'avatar_specops', label: 'Tactical SpecOps', icon: '🛡️', color: 'bg-emerald-800' },
+  { id: 'avatar_operator', label: 'Radio Operator', icon: '📡', color: 'bg-blue-800' },
+  { id: 'avatar_pilot', label: 'Airborne Recon', icon: '🛩️', color: 'bg-sky-800' },
+  { id: 'avatar_rescue', label: 'Mountain Rescue', icon: '🏔️', color: 'bg-amber-800' },
+  { id: 'avatar_crypto', label: 'Cyber Cryptographer', icon: '🔐', color: 'bg-purple-800' },
+  { id: 'avatar_medic', label: 'Field Medic', icon: '⚕️', color: 'bg-rose-800' },
+];
 
 export class MeshNetworkEngine {
   private localIdentity: CryptographicIdentity = {
-    nodeId: '!7a4e9102',
-    callsign: 'GHOST-ACTUAL',
+    nodeId: '!79fc127b',
+    callsign: 'Alex River',
     publicKeyBase64: '04a91b...e2ee',
     fingerprint: 'E84D : 92A1 : F0B3 : 77CA',
+  };
+
+  public userProfile: UserProfile = {
+    nodeId: '!79fc127b',
+    callsign: 'Alex River',
+    avatarUrl: 'avatar_specops',
+    statusMessage: 'Available via Internet & LoRa Mesh',
+    hardwareType: 'Cross-Platform Mesh Client',
+    frequencyBand: '915MHz LoRa & BLE',
+    publicKeyBase64: '04a91b...e2ee',
+    fingerprint: 'E84D : 92A1 : F0B3 : 77CA',
+    batteryPct: 96,
   };
 
   private broadcastChannel: BroadcastChannel | null = null;
   private seenCache = new SeenPacketCache(2000);
   private nodes = new Map<string, MeshNode>();
+  private contacts = new Map<string, MeshContact>();
   private packets: MeshPacket[] = [];
   private listeners: Array<() => void> = [];
 
   public activeChannel = 'Primary-Broadcast';
-  public isCloudGatewayActive = false;
+  public activeDirectRecipient: string | null = null;
+  public isCloudGatewayActive = true;
+  public networkMode: NetworkMode = 'hybrid';
   public activeTransport: TransportMedium = 'lora_rf_915';
 
   constructor() {
     this.initDefaultNodes();
+    this.initDefaultContacts();
     this.initBroadcastChannel();
     this.initIdentity();
 
@@ -35,18 +61,45 @@ export class MeshNetworkEngine {
 
   private async initIdentity() {
     try {
-      const saved = localStorage.getItem('meshwave_identity');
-      if (saved) {
-        this.localIdentity = JSON.parse(saved);
+      const savedProfile = localStorage.getItem('meshwave_user_profile');
+      if (savedProfile) {
+        this.userProfile = JSON.parse(savedProfile);
+        this.localIdentity.nodeId = this.userProfile.nodeId;
+        this.localIdentity.callsign = this.userProfile.callsign;
       } else {
-        const id = await generateDeviceIdentity('OPERATOR-' + Math.floor(100 + Math.random() * 900));
+        const id = await generateDeviceIdentity('Alex River');
         this.localIdentity = id;
-        localStorage.setItem('meshwave_identity', JSON.stringify({
-          nodeId: id.nodeId,
-          callsign: id.callsign,
-          publicKeyBase64: id.publicKeyBase64,
-          fingerprint: id.fingerprint,
-        }));
+        this.userProfile.nodeId = id.nodeId;
+        this.userProfile.callsign = id.callsign;
+        this.userProfile.publicKeyBase64 = id.publicKeyBase64;
+        this.userProfile.fingerprint = id.fingerprint;
+        this.saveProfileToStorage();
+      }
+
+      const savedContacts = localStorage.getItem('meshwave_contacts');
+      if (savedContacts) {
+        const parsed: MeshContact[] = JSON.parse(savedContacts);
+        parsed.forEach((c) => this.contacts.set(c.id, c));
+      }
+
+      const savedPackets = localStorage.getItem('meshwave_packets');
+      if (savedPackets) {
+        try {
+          const parsed: MeshPacket[] = JSON.parse(savedPackets);
+          // Strip out any legacy demo packets so users always have a fresh, clean inbox
+          this.packets = parsed.filter(
+            (p) =>
+              p &&
+              p.id &&
+              !p.id.startsWith('demo_') &&
+              !p.id.startsWith('seed_') &&
+              p.senderId !== '!demo_sender'
+          );
+        } catch {
+          this.packets = [];
+        }
+      } else {
+        this.packets = [];
       }
     } catch {
       // Fallback
@@ -54,11 +107,43 @@ export class MeshNetworkEngine {
     this.notify();
   }
 
+  private saveProfileToStorage() {
+    try {
+      localStorage.setItem('meshwave_user_profile', JSON.stringify(this.userProfile));
+      localStorage.setItem('meshwave_identity', JSON.stringify({
+        nodeId: this.userProfile.nodeId,
+        callsign: this.userProfile.callsign,
+        publicKeyBase64: this.userProfile.publicKeyBase64,
+        fingerprint: this.userProfile.fingerprint,
+      }));
+    } catch {}
+  }
+
+  private saveContactsToStorage() {
+    try {
+      localStorage.setItem('meshwave_contacts', JSON.stringify(Array.from(this.contacts.values())));
+    } catch {}
+  }
+
+  public savePacketsToStorage() {
+    try {
+      localStorage.setItem('meshwave_packets', JSON.stringify(this.packets.slice(-200)));
+    } catch {}
+  }
+
+  public clearAllChats() {
+    this.packets = [];
+    try {
+      localStorage.removeItem('meshwave_packets');
+    } catch {}
+    this.notify();
+  }
+
   private initDefaultNodes() {
     const seedNodes: MeshNode[] = [
       {
         id: '!a9f24c01',
-        callsign: 'ALPHA-RELAY',
+        callsign: 'Alpha Patrol',
         role: 'router',
         hardwareType: 'Heltec LoRa V3',
         frequencyBand: '915MHz (US)',
@@ -72,10 +157,11 @@ export class MeshNetworkEngine {
         publicKey: '04b821ac39...',
         isDirectNeighbor: true,
         status: 'active',
+        avatarUrl: 'avatar_specops',
       },
       {
         id: '!3c1d8820',
-        callsign: 'BRAVO-SCOUT',
+        callsign: 'Bravo Scout',
         role: 'client',
         hardwareType: 'Android BLE',
         frequencyBand: 'BLE 2.4GHz',
@@ -89,10 +175,11 @@ export class MeshNetworkEngine {
         publicKey: '0498dcfa...',
         isDirectNeighbor: false,
         status: 'active',
+        avatarUrl: 'avatar_operator',
       },
       {
         id: '!e7a0910f',
-        callsign: 'ECHO-DRONE-REPEATER',
+        callsign: 'Echo Drone Repeater',
         role: 'repeater',
         hardwareType: 'T-Beam LoRa',
         frequencyBand: '915MHz (US)',
@@ -106,10 +193,11 @@ export class MeshNetworkEngine {
         publicKey: '04ff104a...',
         isDirectNeighbor: true,
         status: 'active',
+        avatarUrl: 'avatar_pilot',
       },
       {
         id: '!99b110ee',
-        callsign: 'SIERRA-GATEWAY',
+        callsign: 'Sierra Base Station',
         role: 'gateway',
         hardwareType: 'Relay Gateway',
         frequencyBand: '915MHz (US)',
@@ -123,56 +211,18 @@ export class MeshNetworkEngine {
         publicKey: '0420e199...',
         isDirectNeighbor: true,
         status: 'active',
+        avatarUrl: 'avatar_rescue',
       },
     ];
 
     seedNodes.forEach((n) => this.nodes.set(n.id, n));
+    // Clean fresh inbox with no demo packets
+    this.packets = [];
+  }
 
-    // Seed realistic offline messages in primary channel
-    const initialPackets: MeshPacket[] = [
-      {
-        id: 'pkt_init_1',
-        channelId: 'Primary-Broadcast',
-        senderId: '!a9f24c01',
-        senderCallsign: 'ALPHA-RELAY',
-        recipientId: 'BROADCAST',
-        type: 'text',
-        payloadCiphertext: 'encrypted_payload_alpha',
-        nonce: '00112233',
-        hopCount: 1,
-        maxHops: 7,
-        transportMedium: 'lora_rf_915',
-        timestamp: Date.now() - 15 * 60 * 1000,
-        isEncrypted: true,
-        decryptedContent: 'All tactical units: Frequency 915.0MHz SF9 active. Mesh topology stable across 4 sectors.',
-        status: 'delivered',
-        relayPath: ['!a9f24c01', '!e7a0910f'],
-        rssiDbm: -68,
-        snrDb: 9.8,
-      },
-      {
-        id: 'pkt_init_2',
-        channelId: 'Primary-Broadcast',
-        senderId: '!3c1d8820',
-        senderCallsign: 'BRAVO-SCOUT',
-        recipientId: 'BROADCAST',
-        type: 'text',
-        payloadCiphertext: 'encrypted_payload_bravo',
-        nonce: '11223344',
-        hopCount: 2,
-        maxHops: 7,
-        transportMedium: 'bluetooth_mesh',
-        timestamp: Date.now() - 8 * 60 * 1000,
-        isEncrypted: true,
-        decryptedContent: 'Bravo checkpoint reached. Cellular & WiFi zero. Relaying over BLE mesh through Echo Drone.',
-        status: 'delivered',
-        relayPath: ['!3c1d8820', '!e7a0910f', '!a9f24c01'],
-        rssiDbm: -84,
-        snrDb: 4.2,
-      },
-    ];
-
-    this.packets = initialPackets;
+  private initDefaultContacts() {
+    // Clean contacts list - user adds or discovers peers naturally
+    this.contacts = new Map();
   }
 
   private initBroadcastChannel() {
@@ -187,7 +237,6 @@ export class MeshNetworkEngine {
           }
         };
 
-        // Broadcast local presence beacon periodically
         setInterval(() => this.broadcastPresence(), 15000);
       } catch (err) {
         console.warn('BroadcastChannel error', err);
@@ -200,17 +249,18 @@ export class MeshNetworkEngine {
     this.broadcastChannel.postMessage({
       type: 'NODE_BEACON',
       node: {
-        id: this.localIdentity.nodeId,
-        callsign: this.localIdentity.callsign,
+        id: this.userProfile.nodeId,
+        callsign: this.userProfile.callsign,
+        avatarUrl: this.userProfile.avatarUrl,
         role: 'client',
-        hardwareType: navigator.userAgent.includes('iPhone') ? 'iOS BLE' : 'Android BLE',
-        frequencyBand: this.activeTransport.includes('915') ? '915MHz (US)' : 'BLE 2.4GHz',
-        batteryPct: 88,
+        hardwareType: 'Cross-Platform Messenger',
+        frequencyBand: '915MHz LoRa & BLE',
+        batteryPct: this.userProfile.batteryPct || 95,
         lastSeenMs: Date.now(),
         rssiDbm: -50,
         snrDb: 11.2,
         hopDistance: 0,
-        publicKey: this.localIdentity.publicKeyBase64,
+        publicKey: this.userProfile.publicKeyBase64,
         isDirectNeighbor: true,
         status: 'active',
       },
@@ -218,7 +268,7 @@ export class MeshNetworkEngine {
   }
 
   private handleNodeBeacon(peerNode: MeshNode) {
-    if (peerNode.id === this.localIdentity.nodeId) return;
+    if (peerNode.id === this.userProfile.nodeId) return;
     this.nodes.set(peerNode.id, {
       ...peerNode,
       lastSeenMs: Date.now(),
@@ -241,33 +291,90 @@ export class MeshNetworkEngine {
     return Array.from(this.nodes.values());
   }
 
-  public getPackets(channelId?: string): MeshPacket[] {
+  public getContacts(): MeshContact[] {
+    return Array.from(this.contacts.values());
+  }
+
+  public getDiscoveredNodes(): MeshNode[] {
+    const contactIds = new Set(this.contacts.keys());
+    return Array.from(this.nodes.values()).filter(
+      (n) => n.id !== this.userProfile.nodeId && !contactIds.has(n.id)
+    );
+  }
+
+  public getPackets(channelId?: string, directRecipientId?: string | null): MeshPacket[] {
+    if (directRecipientId) {
+      return this.packets.filter(
+        (p) =>
+          (p.senderId === directRecipientId && p.recipientId === this.userProfile.nodeId) ||
+          (p.senderId === this.userProfile.nodeId && p.recipientId === directRecipientId)
+      );
+    }
     const ch = channelId || this.activeChannel;
-    return this.packets.filter((p) => p.channelId === ch || p.recipientId === 'BROADCAST');
+    return this.packets.filter((p) => p.channelId === ch && (p.recipientId === 'BROADCAST' || !p.recipientId));
   }
 
   public getIdentity(): CryptographicIdentity {
     return this.localIdentity;
   }
 
-  public updateCallsign(newCallsign: string) {
-    this.localIdentity = {
-      ...this.localIdentity,
-      callsign: newCallsign.trim() || 'OPERATOR',
+  public getUserProfile(): UserProfile {
+    return this.userProfile;
+  }
+
+  public updateUserProfile(updates: Partial<UserProfile>) {
+    this.userProfile = {
+      ...this.userProfile,
+      ...updates,
     };
-    try {
-      localStorage.setItem('meshwave_identity', JSON.stringify({
-        nodeId: this.localIdentity.nodeId,
-        callsign: this.localIdentity.callsign,
-        publicKeyBase64: this.localIdentity.publicKeyBase64,
-        fingerprint: this.localIdentity.fingerprint,
-      }));
-    } catch {}
+    if (updates.nodeId && validateDeviceNodeId(updates.nodeId)) {
+      this.localIdentity.nodeId = updates.nodeId;
+    }
+    if (updates.callsign) {
+      this.localIdentity.callsign = updates.callsign;
+    }
+    this.saveProfileToStorage();
     this.notify();
   }
 
+  public regenerateUniqueDeviceId(): string {
+    const newId = generateDeviceNodeId();
+    this.updateUserProfile({ nodeId: newId });
+    return newId;
+  }
+
+  public addContact(contact: MeshContact) {
+    this.contacts.set(contact.id, contact);
+    this.saveContactsToStorage();
+    this.notify();
+  }
+
+  public removeContact(contactId: string) {
+    this.contacts.delete(contactId);
+    this.saveContactsToStorage();
+    this.notify();
+  }
+
+  public updateContactNickname(contactId: string, nickname: string) {
+    const c = this.contacts.get(contactId);
+    if (c) {
+      this.contacts.set(contactId, { ...c, nickname: nickname.trim() || c.callsign });
+      this.saveContactsToStorage();
+      this.notify();
+    }
+  }
+
+  public toggleContactVerification(contactId: string) {
+    const c = this.contacts.get(contactId);
+    if (c) {
+      this.contacts.set(contactId, { ...c, isVerified: !c.isVerified });
+      this.saveContactsToStorage();
+      this.notify();
+    }
+  }
+
   /**
-   * Send a new message (text, voice, emergency SOS) through the mesh.
+   * Send message (Text / Voice / SOS) supporting both Offline Mesh and Online Internet
    */
   async sendMessage(params: {
     text?: string;
@@ -278,37 +385,48 @@ export class MeshNetworkEngine {
     recipientId?: string;
     passphrase?: string;
   }): Promise<MeshPacket> {
-    const channelId = params.channelId || this.activeChannel;
+    const isDirect = Boolean(params.recipientId && params.recipientId !== 'BROADCAST');
+    const channelId = isDirect ? `dm_${params.recipientId}` : params.channelId || this.activeChannel;
     const type = params.type || (params.audioBase64 ? 'voice' : 'text');
     const contentToEncrypt = params.audioBase64 || params.text || '';
 
-    // E2EE: Encrypt with AES-GCM
+    // E2EE
     const { ciphertext, nonce } = await encryptPayload(contentToEncrypt, params.passphrase);
+
+    // Determine transport based on NetworkMode
+    let transport: TransportMedium = this.activeTransport;
+    const isInternet = this.networkMode === 'internet' || (this.networkMode === 'hybrid' && navigator.onLine);
+    if (isInternet) {
+      transport = 'internet_cloud';
+    }
 
     const packet = createMeshPacket({
       channelId,
-      senderId: this.localIdentity.nodeId,
-      senderCallsign: this.localIdentity.callsign,
+      senderId: this.userProfile.nodeId,
+      senderCallsign: this.userProfile.callsign,
       recipientId: params.recipientId || 'BROADCAST',
       type,
       payloadCiphertext: ciphertext,
       nonce,
-      transportMedium: this.activeTransport,
+      transportMedium: transport,
       isEncrypted: true,
       decryptedContent: params.text,
       audioDurationSec: params.audioDurationSec,
     });
 
+    packet.senderAvatarUrl = this.userProfile.avatarUrl;
+    packet.isInternet = isInternet;
+
     if (params.audioBase64) {
       packet.audioBlobUrl = `data:audio/webm;base64,${params.audioBase64}`;
     }
 
-    // Add to local store
     this.packets.push(packet);
     this.seenCache.add(packet.id);
+    this.savePacketsToStorage();
     this.notify();
 
-    // Broadcast across local devices / tabs
+    // Broadcast locally
     if (this.broadcastChannel) {
       this.broadcastChannel.postMessage({
         type: 'MESH_PACKET',
@@ -316,22 +434,19 @@ export class MeshNetworkEngine {
       });
     }
 
-    // Send over physical Web Serial hardware if connected
+    // Physical radio transmit
     hardwareRadio.sendPacketOverSerial(packet);
 
-    // If acoustic transmission is requested for air-gapped emergency
     if (this.activeTransport === 'acoustic_fsk' && params.text) {
       acousticModem.transmitAcousticChirp(params.text);
     }
 
-    // Simulate multi-hop mesh propagation across simulated nodes
     this.simulateMeshRelay(packet);
 
     return packet;
   }
 
   private async simulateMeshRelay(packet: MeshPacket) {
-    // 1. First hop through nearby router (Alpha Relay or Echo Drone)
     setTimeout(() => {
       const idx = this.packets.findIndex((p) => p.id === packet.id);
       if (idx !== -1) {
@@ -340,11 +455,11 @@ export class MeshNetworkEngine {
           status: 'relayed',
           relayPath: [...this.packets[idx].relayPath, '!e7a0910f'],
         };
+        this.savePacketsToStorage();
         this.notify();
       }
-    }, 700);
+    }, 600);
 
-    // 2. Multi-hop acknowledgment
     setTimeout(() => {
       const idx = this.packets.findIndex((p) => p.id === packet.id);
       if (idx !== -1) {
@@ -353,26 +468,40 @@ export class MeshNetworkEngine {
           status: 'delivered',
           relayPath: [...this.packets[idx].relayPath, '!a9f24c01', '!99b110ee'],
         };
+        this.savePacketsToStorage();
         this.notify();
       }
-    }, 1800);
+    }, 1500);
   }
 
-  /**
-   * Handle incoming packet from any transport (BLE, LoRa serial, BroadcastChannel, acoustic)
-   */
+  public clearChannelPackets(channelId?: string, directRecipientId?: string | null) {
+    if (directRecipientId) {
+      this.packets = this.packets.filter(
+        (p) =>
+          !(
+            (p.senderId === directRecipientId && p.recipientId === this.userProfile.nodeId) ||
+            (p.senderId === this.userProfile.nodeId && p.recipientId === directRecipientId)
+          )
+      );
+    } else if (channelId) {
+      this.packets = this.packets.filter((p) => p.channelId !== channelId);
+    } else {
+      this.packets = [];
+    }
+    this.savePacketsToStorage();
+    this.notify();
+  }
+
   async handleIncomingPacket(packet: MeshPacket) {
     if (!packet || !packet.id) return;
 
-    // Check store-and-forward rules
-    const decision = shouldRelayPacket(packet, this.localIdentity.nodeId, this.seenCache);
+    const decision = shouldRelayPacket(packet, this.userProfile.nodeId, this.seenCache);
     if (!decision.relay && this.seenCache.has(packet.id)) {
       return;
     }
 
     this.seenCache.add(packet.id);
 
-    // Decrypt content if not already decrypted
     if (packet.isEncrypted && !packet.decryptedContent) {
       try {
         const decrypted = await decryptPayload(packet.payloadCiphertext, packet.nonce);
@@ -380,18 +509,17 @@ export class MeshNetworkEngine {
         if (packet.type === 'voice') {
           packet.audioBlobUrl = `data:audio/webm;base64,${decrypted}`;
         }
-      } catch (err) {
-        packet.decryptedContent = `[Encrypted payload - key mismatch]`;
+      } catch {
+        packet.decryptedContent = `[Encrypted Message]`;
       }
     }
 
-    // Add to message feed
     this.packets.push(packet);
+    this.savePacketsToStorage();
     this.notify();
 
-    // If this node is acting as a router/repeater, re-relay packet
     if (decision.relay && packet.hopCount < packet.maxHops) {
-      const relayPkt = prepareRelayPacket(packet, this.localIdentity.nodeId);
+      const relayPkt = prepareRelayPacket(packet, this.userProfile.nodeId);
       if (this.broadcastChannel) {
         this.broadcastChannel.postMessage({
           type: 'MESH_PACKET',
@@ -400,11 +528,6 @@ export class MeshNetworkEngine {
       }
       hardwareRadio.sendPacketOverSerial(relayPkt);
     }
-  }
-
-  clearHistory() {
-    this.packets = [];
-    this.notify();
   }
 }
 
